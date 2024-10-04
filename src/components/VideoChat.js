@@ -9,6 +9,12 @@ import {
   getDocs,
   writeBatch,
 } from "firebase/firestore";
+import {
+  getStorage,
+  ref,
+  uploadBytesResumable,
+  getDownloadURL,
+} from "firebase/storage";
 
 import { db } from "../firebase";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -20,6 +26,8 @@ import {
   FaPhoneSlash,
   FaLink,
   FaDesktop,
+  FaComment,
+  FaFile,
 } from "react-icons/fa";
 import { iceServers } from "../config";
 
@@ -35,6 +43,11 @@ const VideoChat = () => {
   const [isMicOn, setIsMicOn] = useState(true);
   const [showCopiedMessage, setShowCopiedMessage] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState("");
+  const [file, setFile] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const localStream = useRef();
   const remoteStream = useRef();
@@ -67,6 +80,7 @@ const VideoChat = () => {
             }
           }
           listenForParticipants(id);
+          listenForChatMessages(id);
         }
       };
 
@@ -124,6 +138,61 @@ const VideoChat = () => {
     return unsubscribe;
   };
 
+  const listenForChatMessages = (id) => {
+    const chatCollection = collection(db, "calls", id, "chat");
+    const unsubscribe = onSnapshot(chatCollection, (snapshot) => {
+      const newMessages = snapshot.docs.map((doc) => doc.data());
+      setMessages(newMessages);
+    });
+    setListeners((prev) => [...prev, unsubscribe]);
+    return unsubscribe;
+  };
+
+  const sendMessage = async () => {
+    if (newMessage.trim() === "") return;
+    const chatCollection = collection(db, "calls", callId, "chat");
+    await addDoc(chatCollection, {
+      sender: "User", // Replace with actual user identifier
+      message: newMessage,
+      timestamp: new Date(),
+    });
+    setNewMessage("");
+  };
+
+  const sendFile = async () => {
+    if (!file) return;
+
+    const storage = getStorage();
+    const storageRef = ref(storage, `calls/${callId}/${file.name}`);
+    const uploadTask = uploadBytesResumable(storageRef, file);
+
+    uploadTask.on(
+      "state_changed",
+      (snapshot) => {
+        const progress =
+          (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+        setUploadProgress(progress);
+      },
+      (error) => {
+        console.error("Upload failed", error);
+      },
+      async () => {
+        const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+        const chatCollection = collection(db, "calls", callId, "chat");
+        await addDoc(chatCollection, {
+          sender: "User", // Replace with actual user identifier
+          file: {
+            name: file.name,
+            url: downloadURL,
+          },
+          timestamp: new Date(),
+        });
+        setFile(null);
+        setUploadProgress(0);
+      }
+    );
+  };
+
   const init = async () => {
     localStream.current = await navigator.mediaDevices.getUserMedia({
       video: true,
@@ -146,6 +215,8 @@ const VideoChat = () => {
         remoteStream.current.addTrack(track);
       });
     };
+
+    console.log("thi sis working");
 
     // Handle peer disconnection
     peerConnection.current.oniceconnectionstatechange = () => {
@@ -561,7 +632,68 @@ const VideoChat = () => {
           >
             <FaPhoneSlash size={24} />
           </button>
+          <button
+            onClick={() => setShowChat(!showChat)}
+            className="p-4 rounded-full bg-purple-600 hover:opacity-80 transition-opacity"
+          >
+            <FaComment size={24} />
+          </button>
         </div>
+        {showChat && (
+          <div className="mt-6 p-4 bg-gray-800 rounded-lg">
+            <div className="h-64 overflow-y-auto">
+              {messages.map((msg, index) => (
+                <div key={index} className="mb-2">
+                  <strong>{msg.sender}:</strong>{" "}
+                  {msg.message ? (
+                    msg.message
+                  ) : (
+                    <a
+                      href={msg.file.url}
+                      target="_blank"
+                      download={msg.file.name}
+                    >
+                      {msg.file.name}
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 flex">
+              <input
+                type="text"
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                className="flex-grow bg-gray-700 text-white p-2 rounded-l-lg focus:outline-none"
+                placeholder="Type a message..."
+              />
+              <button
+                onClick={sendMessage}
+                className="bg-blue-600 text-white p-2 rounded-r-lg hover:opacity-80 transition-opacity"
+              >
+                Send
+              </button>
+            </div>
+            <div className="mt-4 flex">
+              <input
+                type="file"
+                onChange={(e) => setFile(e.target.files[0])}
+                className="flex-grow bg-gray-700 text-white p-2 rounded-l-lg focus:outline-none"
+              />
+              <button
+                onClick={sendFile}
+                className="bg-blue-600 text-white p-2 rounded-r-lg hover:opacity-80 transition-opacity"
+              >
+                <FaFile size={24} />
+              </button>
+              {uploadProgress > 0 && (
+                <div className="ml-4">
+                  Upload Progress: {uploadProgress.toFixed(2)}%
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
